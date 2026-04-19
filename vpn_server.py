@@ -1,0 +1,123 @@
+import tkinter as tk
+from tkinter.scrolledtext import ScrolledText
+import threading
+import socket, ssl
+import json, random, string
+from scapy.layers.l2 import Ether, ARP
+from scapy.all import srp, conf, sniff
+
+class VPNServerApp(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("Python VPN Server")
+        self.geometry("760x560")
+
+        self.log_widget = ScrolledText(self, state="disabled")
+        self.log_widget.pack(fill="both", expand=True)
+
+        self.stopped = False
+        self.server_thread = threading.Thread(target=self.server_loop, daemon=True)
+        self.server_thread.start()
+
+    def append_log(self, msg):
+        self.log_widget.config(state="normal")
+        self.log_widget.insert(tk.END, msg + "\n")
+        self.log_widget.config(state="disabled")
+        self.log_widget.yview(tk.END)
+
+    def server_loop(self):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain('cert.pem', 'key.pem')
+
+        raw_sock = socket.socket()
+        raw_sock.bind(("0.0.0.0", 8443))
+        raw_sock.listen(5)
+
+        self.after(0, self.append_log, "Server listening...")
+
+        while not self.stopped:
+            client_sock, addr = raw_sock.accept()
+            tls_conn = ctx.wrap_socket(client_sock, server_side=True)
+
+            self.after(0, self.append_log, f"Connection from {addr}")
+
+            threading.Thread(
+                target=self.handle_client,
+                args=(tls_conn, addr),
+                daemon=True
+            ).start()
+
+    def gen_auth_key(n=8):
+        chars = string.ascii_letters + string.digits
+        return "".join(random.choice(chars) for _ in range(n))
+
+    def handle_client(self, conn, addr):
+
+        data = conn.recv(4096)
+        init = json.loads(data.decode())
+
+        if init.get('password') != "MyS3cureV!PN":
+            conn.sendall(json.dumps({'status': 'error'}).encode())
+            conn.close()
+            return
+
+        self.after(0, self.append_log, "Client authenticated")
+
+        table = self.arp_sweep("192.168.1.0/24")
+        key = self.gen_auth_key()
+
+        conn.sendall(json.dumps({
+            'status': 'challenge',
+            'authKey': key,
+            'hosts': [{'ip': ip, 'mac': mac} for ip, mac in table.items()]
+        }).encode())
+
+        ack = json.loads(conn.recv(4096).decode())
+
+        if ack.get('authKey') != key:
+            conn.close()
+            return
+
+        conn.sendall(json.dumps({'status': 'ready'}).encode())
+
+        threading.Thread(target=self.inject_reqs, args=(conn, table), daemon=True).start()
+        threading.Thread(target=self.sniff_repls, args=(conn, addr[0]), daemon=True).start()
+
+    def arp_sweep(self, subnet):
+        pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=subnet)
+        answered, _ = srp(pkt, timeout=2, verbose=0, iface=conf.iface)
+
+        table = {}
+        for _, rcv in answered:
+            table[rcv.psrc] = rcv.hwsrc
+
+        return table
+
+    def inject_reqs(self, conn, table):
+        while True:
+            hdr = conn.recv(4)
+            if not hdr:
+                return
+
+            length = int.from_bytes(hdr, 'big')
+            data = conn.recv(length)
+
+            pkt = IP(data)
+
+            if ICMP in pkt and pkt[ICMP].type == 8:
+                dst = pkt.dst
+                mac = table.get(dst)
+
+                eth = Ether(dst=mac) / pkt if mac else Ether(dst="ff:ff:ff:ff:ff:ff") / pkt
+                sendp(eth, verbose=0)
+
+    def sniff_repls(self, conn, client_ip):
+        def prn(pkt):
+            if IP in pkt and ICMP in pkt and pkt[ICMP].type == 0:
+                raw = bytes(pkt[IP])
+                conn.sendall(len(raw).to_bytes(4, 'big') + raw)
+
+        sniff(filter="icmp", prn=prn, store=0)
+
+if __name__ == "__main__":
+    VPNServerApp().mainloop()
