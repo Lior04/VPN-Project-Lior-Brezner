@@ -3,8 +3,8 @@ from tkinter import messagebox, PhotoImage
 from tkinter.scrolledtext import ScrolledText
 import socket, ssl, threading, json
 from scapy.all import send, conf, get_if_hwaddr
-from scapy.layers.inet import IP, ICMP
-import cryptography
+from scapy.layers.inet import IP, ICMP, sr1
+
 
 class VPNClientApp(tk.Tk):
     def __init__(self):
@@ -61,6 +61,7 @@ class VPNClientApp(tk.Tk):
         ss.recv(4096)
 
         self.after(0, self.build_main)
+        threading.Thread(target=self.receive_loop, daemon=True).start()
     
 
     def send_packet(self, raw_bytes, dst_ip):
@@ -113,6 +114,25 @@ class VPNClientApp(tk.Tk):
             if ICMP in pkt and pkt[ICMP].type == 0:
                 print("Reply from", pkt.src)
                 threading.Thread(target=self.recv_replies, daemon=True).start()
+
+    def receive_loop(self):
+        while True:
+            try:
+                hdr = self.conn.recv(4)
+                if not hdr:
+                    break
+
+                length = int.from_bytes(hdr, 'big')
+
+                data = self.conn.recv(length)
+                msg = json.loads(data.decode())
+
+                if msg["type"] == "ICMP_REPLY":
+                    print(f"[+] Reply from {msg['src']} (id={msg['id']})")
+
+            except Exception as e:
+                print("Error receiving:", e)
+                break
 
 
 if __name__ == "__main__":
