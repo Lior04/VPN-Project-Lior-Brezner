@@ -61,6 +61,22 @@ class VPNClientApp(tk.Tk):
         ss.recv(4096)
 
         self.after(0, self.build_main)
+    
+
+    def send_packet(self, raw_bytes, dst_ip):
+        message = {
+            "type" : "ICMP",
+            "id": self.packet_id,
+            "dst": dst_ip,
+            "payload": raw_bytes.hex()
+        }
+
+        data = json.dumps(message).encode()
+
+        self.conn.sendall(len(data).to_bytes(4, 'big') + data)
+        print(f"[+] Sent packet {self.packet_id} to {dst_ip}")
+
+        self.packet_id += 1
 
 
 
@@ -82,7 +98,7 @@ class VPNClientApp(tk.Tk):
         pkt = IP(src=self.local_ip, dst=ip) / ICMP()
         raw = bytes(pkt)
 
-        self.conn.sendall(len(raw).to_bytes(4, 'big') + raw)
+        self.send_packet(raw, ip)
 
 
     def recv_replies(self):
