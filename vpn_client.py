@@ -4,6 +4,7 @@ from tkinter.scrolledtext import ScrolledText
 import socket, ssl, threading, json
 from scapy.all import send, conf, get_if_hwaddr
 from scapy.layers.inet import IP, ICMP
+import cryptography
 
 class VPNClientApp(tk.Tk):
     def __init__(self):
