@@ -1,10 +1,21 @@
+import socket, ssl, threading, json, random, string, sqlite3
+from scapy.layers.l2 import Ether, ARP
+from scapy.all import srp, sniff, sendp, conf
+from scapy.layers.inet import IP, ICMP
 import tkinter as tk
 from tkinter.scrolledtext import ScrolledText
-import threading
-import socket, ssl
-import json, random, string
-from scapy.layers.l2 import Ether, ARP
-from scapy.all import srp, conf, sniff
+import os
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
+KEY_FILE = os.path.join(BASE_DIR, "key.pem")
+
+
+def gen_auth_key(n=8):
+    chars = string.ascii_letters + string.digits
+    return "".join(random.choice(chars) for _ in range(n))
+
 
 class VPNServerApp(tk.Tk):
     def __init__(self):
