@@ -37,42 +37,56 @@ class VPNServerApp(tk.Tk):
         self.log_widget.yview(tk.END)
 
     def server_loop(self):
+        print("CERT:", CERT_FILE)
+        print("KEY:", KEY_FILE)
+        print("cert exists?", os.path.exists(CERT_FILE))
+        print("key exists?", os.path.exists(KEY_FILE))
+
+
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-        ctx.load_cert_chain('cert.pem', 'key.pem')
+        ctx.load_cert_chain(CERT_FILE, KEY_FILE)
 
         raw_sock = socket.socket()
+        raw_sock.settimeout(1.0)
         raw_sock.bind(("0.0.0.0", 8443))
         raw_sock.listen(5)
 
         self.after(0, self.append_log, "Server listening...")
 
         while not self.stopped:
-            client_sock, addr = raw_sock.accept()
-            tls_conn = ctx.wrap_socket(client_sock, server_side=True)
+            try:
+                client_sock, addr = raw_sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
 
-            self.after(0, self.append_log, f"Connection from {addr}")
+            try:
+                tls_conn = ctx.wrap_socket(client_sock, server_side=True)
+            except:
+                continue
 
-            threading.Thread(
-                target=self.handle_client,
-                args=(tls_conn, addr),
-                daemon=True
-            ).start()
+        self.after(0, self.append_log, f"SERVER: TLS connection from {addr}")
+        # מטפל בכל לקוח ב-thread נפרד
+        threading.Thread(target=self.handle_client, args=(tls_conn, addr), daemon=True).start()
+        
 
     def gen_auth_key(n=8):
         chars = string.ascii_letters + string.digits
         return "".join(random.choice(chars) for _ in range(n))
 
     def handle_client(self, conn, addr):
-
+        client_ip = addr[0]
         data = conn.recv(4096)
         init = json.loads(data.decode())
 
         if init.get('password') != "MyS3cureV!PN":
-            conn.sendall(json.dumps({'status': 'error'}).encode())
+            conn.sendall(json.dumps({'status':'error','reason':'bad password'}).encode())
+            self.after(0, self.append_log, "SERVER: bad password")
             conn.close()
             return
 
-        self.after(0, self.append_log, "Client authenticated")
+        self.after(0, self.append_log, f"SERVER: auth ok for MAC {init.get('client_mac')}")
 
         table = self.arp_sweep("192.168.1.0/24")
         key = self.gen_auth_key()
@@ -86,21 +100,27 @@ class VPNServerApp(tk.Tk):
         ack = json.loads(conn.recv(4096).decode())
 
         if ack.get('authKey') != key:
+            conn.sendall(json.dumps({'status':'error','reason':'bad authKey'}).encode())
+            self.after(0, self.append_log, "SERVER: bad authKey")
             conn.close()
             return
 
         conn.sendall(json.dumps({'status': 'ready'}).encode())
+        self.after(0, self.append_log, "SERVER: handshake complete, tunnel open")
 
         threading.Thread(target=self.inject_reqs, args=(conn, table), daemon=True).start()
         threading.Thread(target=self.sniff_repls, args=(conn, addr[0]), daemon=True).start()
 
     def arp_sweep(self, subnet):
+        self.after(0, self.append_log, f"SERVER: ARP sweep on {subnet}")
         pkt = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(pdst=subnet)
         answered, _ = srp(pkt, timeout=2, verbose=0, iface=conf.iface)
 
         table = {}
         for _, rcv in answered:
-            table[rcv.psrc] = rcv.hwsrc
+            ip, mac = rcv.psrc, rcv.hwsrc
+            self.after(0, self.append_log, f"SERVER: found {ip} @ {mac}")
+            table[ip] = mac
 
         return table
 
