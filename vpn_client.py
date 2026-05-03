@@ -3,8 +3,9 @@ from tkinter import messagebox, PhotoImage
 from tkinter.scrolledtext import ScrolledText
 import socket, ssl, threading, json
 from scapy.all import send, conf, get_if_hwaddr
-from scapy.layers.inet import IP, ICMP, sr1
+from scapy.layers.inet import IP, ICMP
 
+SERVER_PORT = 8443
 
 class VPNClientApp(tk.Tk):
     def __init__(self):

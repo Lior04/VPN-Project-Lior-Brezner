@@ -125,30 +125,36 @@ class VPNServerApp(tk.Tk):
         return table
 
     def inject_reqs(self, conn, table):
-        while True:
+        while not self.stopped:
             hdr = conn.recv(4)
             if not hdr:
                 return
-
             length = int.from_bytes(hdr, 'big')
             data = conn.recv(length)
-
             pkt = IP(data)
-
+            # מוצא רק חבילות ICMP מסוג Echo Request (type==8)
             if ICMP in pkt and pkt[ICMP].type == 8:
-                dst = pkt.dst
+                dst = pkt[IP].dst
                 mac = table.get(dst)
-
-                eth = Ether(dst=mac) / pkt if mac else Ether(dst="ff:ff:ff:ff:ff:ff") / pkt
-                sendp(eth, verbose=0)
+                eth = Ether(dst=mac)/pkt if mac else Ether(dst="ff:ff:ff:ff:ff:ff")/pkt
+                tag = mac if mac else "broadcast"
+                self.after(0, self.append_log, f"SERVER: inject {pkt.src}→{pkt.dst} @ {tag}")
+                sendp(eth, iface=conf.iface, verbose=0)
 
     def sniff_repls(self, conn, client_ip):
+        iface = conf.iface
+        self.after(0, self.append_log, f"SERVER: sniffing replies on {iface} for {client_ip}")
         def prn(pkt):
-            if IP in pkt and ICMP in pkt and pkt[ICMP].type == 0:
+            if IP in pkt and ICMP in pkt and pkt[IP].dst == client_ip and pkt[ICMP].type == 0:
                 raw = bytes(pkt[IP])
+                self.after(0, self.append_log, f"SERVER: captured reply {pkt.src}→{pkt.dst}")
                 conn.sendall(len(raw).to_bytes(4, 'big') + raw)
+        sniff(iface=iface, filter=f"icmp and dst host {client_ip}", prn=prn, store=0)
 
-        sniff(filter="icmp", prn=prn, store=0)
+    def stop_server(self):
+        self.stopped = True
+        self.sock.close()
+        self.destroy()
 
 if __name__ == "__main__":
     VPNServerApp().mainloop()
