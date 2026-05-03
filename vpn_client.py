@@ -63,21 +63,6 @@ class VPNClientApp(tk.Tk):
         self.after(0, self.build_main)
     
 
-    def send_packet(self, raw_bytes, dst_ip):
-        message = {
-            "type" : "ICMP",
-            "id": self.packet_id,
-            "dst": dst_ip,
-            "payload": raw_bytes.hex()
-        }
-
-        data = json.dumps(message).encode()
-
-        self.conn.sendall(len(data).to_bytes(4, 'big') + data)
-        print(f"[+] Sent packet {self.packet_id} to {dst_ip}")
-
-        self.packet_id += 1
-
 
 
     def build_main(self):
@@ -116,7 +101,16 @@ class VPNClientApp(tk.Tk):
         threading.Thread(target=lambda: self._tunnel_ping(ip), daemon=True).start()
         
     
-    
+    def _tunnel_ping(self, ip):
+        from threading import Timer
+        pkt = IP(src=self.local_ip, dst=ip)/ICMP(type=8, id=0x1234, seq=1)
+        raw = bytes(pkt)
+
+
+        self.conn.sendall(len(raw).to_bytes(4,'big') + raw)
+        self._log(f"→ tunneled ping {ip}")
+        t = Timer(2.0, lambda: self._log(f"✗ no reply {ip}"))
+        self.pending[ip] = t; t.start()
 
 
     def recv_replies(self):
@@ -129,27 +123,23 @@ class VPNClientApp(tk.Tk):
             pkt = IP(data)
 
             if ICMP in pkt and pkt[ICMP].type == 0:
-                print("Reply from", pkt.src)
-                threading.Thread(target=self.recv_replies, daemon=True).start()
+                src = pkt.src
+                self._log(f"← reply {src} → {pkt.dst}")
+                t = self.pending.pop(src, None)
+                if t:
+                    t.cancel()
 
-    def receive_loop(self):
-        while True:
-            try:
-                hdr = self.conn.recv(4)
-                if not hdr:
-                    break
+    def _log(self, msg):
+        self.log.config(state="normal")
+        self.log.insert(tk.END, msg + "\n")
+        self.log.config(state="disabled")
+        self.log.yview(tk.END)
 
-                length = int.from_bytes(hdr, 'big')
+    def disconnect(self):
+        if self.conn:
+            self.conn.close()
+        self.destroy()
 
-                data = self.conn.recv(length)
-                msg = json.loads(data.decode())
-
-                if msg["type"] == "ICMP_REPLY":
-                    print(f"[+] Reply from {msg['src']} (id={msg['id']})")
-
-            except Exception as e:
-                print("Error receiving:", e)
-                break
 
 
 if __name__ == "__main__":
