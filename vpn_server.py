@@ -26,6 +26,9 @@ class VPNServerApp(tk.Tk):
         self.log_widget = ScrolledText(self, state="disabled")
         self.log_widget.pack(fill="both", expand=True)
 
+        btn = tk.Button(self, text="Stop Server", bg="red", fg="white", command=self.stop_server)
+        btn.pack(pady=10)
+
         self.stopped = False
         self.server_thread = threading.Thread(target=self.server_loop, daemon=True)
         self.server_thread.start()
@@ -70,10 +73,6 @@ class VPNServerApp(tk.Tk):
         # מטפל בכל לקוח ב-thread נפרד
         threading.Thread(target=self.handle_client, args=(tls_conn, addr), daemon=True).start()
         
-
-    def gen_auth_key(n=8):
-        chars = string.ascii_letters + string.digits
-        return "".join(random.choice(chars) for _ in range(n))
 
     def handle_client(self, conn, addr):
         client_ip = addr[0]
@@ -132,7 +131,6 @@ class VPNServerApp(tk.Tk):
             length = int.from_bytes(hdr, 'big')
             data = conn.recv(length)
             pkt = IP(data)
-            # מוצא רק חבילות ICMP מסוג Echo Request (type==8)
             if ICMP in pkt and pkt[ICMP].type == 8:
                 dst = pkt[IP].dst
                 mac = table.get(dst)
