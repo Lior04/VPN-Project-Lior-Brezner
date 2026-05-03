@@ -34,7 +34,7 @@ class VPNClientApp(tk.Tk):
 
     def handshake(self):
         srv = self.server_e.get()
-        raw = socket.create_connection((srv, 8443))
+        raw = socket.create_connection((srv, SERVER_PORT))
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
@@ -57,12 +57,10 @@ class VPNClientApp(tk.Tk):
         hosts = ch['hosts']
         self.allowed = {h['ip'] for h in hosts}
 
-        {h['ip'] for h in hosts}
-
-        ss.recv(4096)
+        ss.sendall(json.dumps({'authKey':key}).encode())
+        rd = json.loads(ss.recv(4096).decode())
 
         self.after(0, self.build_main)
-        threading.Thread(target=self.receive_loop, daemon=True).start()
     
 
     def send_packet(self, raw_bytes, dst_ip):
@@ -85,22 +83,40 @@ class VPNClientApp(tk.Tk):
     def build_main(self):
         self.login_frame.pack_forget()
         mf = tk.Frame(self)
-        mf.pack(fill="both", expand=True)
+        mf.pack(fill="both", expand=True, padx=10, pady=10)
 
-        self.lb = tk.Listbox(mf)
-        for ip in self.allowed:
+        tk.Label(mf, text="Available Hosts:").grid(row=0,column=0,sticky="w")
+        self.lb = tk.Listbox(mf, height=8)
+        for ip in sorted(self.allowed):
             self.lb.insert(tk.END, ip)
-        self.lb.pack()
+        self.lb.grid(row=1,column=0,sticky="nsew")
 
-        tk.Button(mf, text="Ping", command=self.ping).pack()
+        tk.Button(mf, text="Ping Selected", command=self.ping).grid(
+            row=2,column=0,sticky="ew", pady=5
+        )
+
+        tk.Label(mf, text="Log:").grid(row=0,column=1,sticky="w",padx=(10,0))
+        self.log = ScrolledText(mf, state="disabled")
+        self.log.grid(row=1,column=1,rowspan=3,sticky="nsew",padx=(10,0))
+
+        tk.Button(mf, text="Disconnect", command=self.disconnect).grid(
+            row=4,column=0,columnspan=2,sticky="ew", pady=(10,0)
+        )
+
+        mf.grid_columnconfigure(0, weight=1)
+        mf.grid_columnconfigure(1, weight=2)
+        mf.grid_rowconfigure(1, weight=1)
+
+        threading.Thread(target=self.recv_replies, daemon=True).start()
+        
+
 
     def ping(self):
         ip = self.lb.get(self.lb.curselection())
         threading.Thread(target=lambda: self._tunnel_ping(ip), daemon=True).start()
-        pkt = IP(src=self.local_ip, dst=ip) / ICMP()
-        raw = bytes(pkt)
-
-        self.send_packet(raw, ip)
+        
+    
+    
 
 
     def recv_replies(self):
