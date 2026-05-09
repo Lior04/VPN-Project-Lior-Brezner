@@ -10,6 +10,7 @@ import ipaddress
 import psutil
 from dotenv import load_dotenv
 import bcrypt
+import secrets
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
@@ -87,6 +88,7 @@ class TestVPNServerAppGui(tk.Tk):
                 break
             try:
                 tls_conn = ctx.wrap_socket(client_sock, server_side=True)
+                tls_conn.settimeout(10)
             except:
                 continue
 
@@ -95,46 +97,54 @@ class TestVPNServerAppGui(tk.Tk):
 
 
     def handle_client(self, addr, conn):
-        client_ip = addr[0]
-        data = self.recv_exact(conn, 4096)
-        init = json.loads(data.decode())
-        received_password = init.get("password", "")
+        try:
+            client_ip = addr[0]
+            data = self.recv_exact(conn, 4096)
+            init = json.loads(data.decode())
+            received_password = init.get("password", "")
 
-        if not bcrypt.checkpw(received_password.encode(), PASSWORD_HASH.encode()):
-            conn.sendall(json.dumps({'status': 'error', 'reason': 'bad password'}).encode())
-            self.after(0, self.append_log, "SERVER: bad password")
-            conn.close()
-            return
+            if not bcrypt.checkpw(received_password.encode(), PASSWORD_HASH.encode()):
+                conn.sendall(json.dumps({'status': 'error', 'reason': 'bad password'}).encode())
+                self.after(0, self.append_log, "SERVER: bad password")
+                conn.close()
+                return
 
-        self.after(0, self.append_log, f"SERVER: auth ok for MAC {init.get('client_mac')}")
+            self.after(0, self.append_log, f"SERVER: auth ok for MAC {init.get('client_mac')}")
 
-        subnet = self.get_local_subnet()
-        self.after(0, self.append_log, f"SERVER: detected local subnet {subnet}")
-        table = self.arp_sweep(subnet)
-       
-        key = gen_auth_key()
-      
-        conn.sendall(json.dumps({
-            'status': 'challenge',
-            'authKey': key,
-            'hosts': [{'ip': ip, 'mac': mac} for ip, mac in table.items()]
-        }).encode())
+            subnet = self.get_local_subnet()
+            self.after(0, self.append_log, f"SERVER: detected local subnet {subnet}")
+            table = self.arp_sweep(subnet)
+        
+            key = gen_auth_key()
 
-   
-        ack = json.loads(self.recv_exact(conn, 4096).decode())
-        if ack.get('authKey') != key:
-            conn.sendall(json.dumps({'status': 'error', 'reason': 'bad authKey'}).encode())
-            self.after(0, self.append_log, "SERVER: bad authKey")
-            conn.close()
-            return
+            session_id = secrets.token_hex(16)
+
+            conn.sendall(json.dumps({
+                'status': 'challenge',
+                'session_id': session_id,
+                'authKey': key,
+                'hosts': [{'ip': ip, 'mac': mac} for ip, mac in table.items()]
+            }).encode())
 
     
-        conn.sendall(json.dumps({'status': 'ready'}).encode())
-        self.after(0, self.append_log, "SERVER: handshake complete, tunnel open")
+            ack = json.loads(self.recv_exact(conn, 4096).decode())
+            if ack.get('authKey') != key:
+                conn.sendall(json.dumps({'status': 'error', 'reason': 'bad authKey'}).encode())
+                self.after(0, self.append_log, "SERVER: bad authKey")
+                conn.close()
+                return
 
-       
-        threading.Thread(target=self.inject_reqs, args=(conn, table), daemon=True).start()
-        threading.Thread(target=self.sniff_repls, args=(conn, client_ip), daemon=True).start()
+        
+            conn.sendall(json.dumps({'status': 'ready'}).encode())
+            self.after(0, self.append_log, "SERVER: handshake complete, tunnel open")
+
+        
+            threading.Thread(target=self.inject_reqs, args=(conn, table), daemon=True).start()
+            threading.Thread(target=self.sniff_repls, args=(conn, client_ip), daemon=True).start()
+
+
+        except socket.timeout:
+            self._log("Connection timeout")
 
     def append_log(self, msg):
             self.log_widget.config(state="normal")
@@ -175,7 +185,9 @@ class TestVPNServerAppGui(tk.Tk):
                 hdr = self.recv_exact(conn, 4)
                 if not hdr: return
                 length = int.from_bytes(hdr, 'big')
-                data = self.recv_exact(conn, length)
+                payload = self.recv_exact(conn, length)
+                sid = payload[:16].hex()
+                data = payload[16:]
                 pkt = IP(data)
                 
                 if ICMP in pkt and pkt[ICMP].type == 8:
@@ -198,30 +210,35 @@ class TestVPNServerAppGui(tk.Tk):
                     self.after(0, self.append_log, f"NAT Inject: {server_ip} -> {dst}")
             except Exception as e:
                 print(f"Injection error: {e}")
+            except socket.timeout:
+                self._log("Connection timeout")
 
 
 
     def sniff_repls(self, conn, client_ip):
-        active_iface = conf.iface
-        server_ip = self.get_primary_local_ip()
-        
-        # Filter for ICMP replies sent to the Server IP
-        filter_str = f"icmp and dst host {server_ip} and icmp[0] == 0" 
-        
-        def prn(pkt):
-            if IP in pkt:
-                # We change the destination back to the Client IP 
-                # so the client Scapy parser recognizes it
-                pkt[IP].dst = client_ip
-                
-                raw = bytes(pkt[IP])
-                try:
-                    conn.sendall(len(raw).to_bytes(4, 'big') + raw)
-                    self.after(0, self.append_log, f"Tunneled reply from {pkt.src} back to client")
-                except:
-                    return True 
+        try:
+            active_iface = conf.iface
+            server_ip = self.get_primary_local_ip()
+            
+            # Filter for ICMP replies sent to the Server IP
+            filter_str = f"icmp and dst host {server_ip} and icmp[0] == 0" 
+            
+            def prn(pkt):
+                if IP in pkt:
+                    # We change the destination back to the Client IP 
+                    # so the client Scapy parser recognizes it
+                    pkt[IP].dst = client_ip
+                    
+                    raw = bytes(pkt[IP])
+                    try:
+                        conn.sendall(len(raw).to_bytes(4, 'big') + raw)
+                        self.after(0, self.append_log, f"Tunneled reply from {pkt.src} back to client")
+                    except:
+                        return True 
 
-        sniff(iface=active_iface, filter=filter_str, prn=prn, store=0)
+            sniff(iface=active_iface, filter=filter_str, prn=prn, store=0)
+        except socket.timeout:
+            self._log("Connection timeout")
 
     def get_primary_local_ip(self):
 
