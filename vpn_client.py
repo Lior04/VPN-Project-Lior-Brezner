@@ -65,7 +65,7 @@ class VPNClientApp(tk.Tk):
             init = {'password': self.pw_e.get(), 'client_mac': mac}
             self.conn.sendall(json.dumps(init).encode())
 
-            ch = json.loads(self.conn.recv(16384).decode())
+            ch = json.loads(self.recv_exact(self.conn, 16384).decode())
             if ch['status'] == 'error':
                 messagebox.showerror('server say: ' + ch['status'])
                 tk.Tk.destroy(self)
@@ -76,7 +76,7 @@ class VPNClientApp(tk.Tk):
             self.allowed = {h['ip'] for h in hosts}
 
             self.conn.sendall(json.dumps({'authKey': key}).encode())
-            rd = json.loads(self.conn.recv(4096).decode())
+            rd = json.loads(self.recv_exact(self.conn, 4096).decode())
             if rd['status'] == 'error':
                 messagebox.showerror('server say: ' + rd['status'])
                 tk.Tk.destroy(self)
@@ -140,12 +140,12 @@ class VPNClientApp(tk.Tk):
     def recv_replies(self):
 
         while True:
-            hdr = self.conn.recv(4)
+            hdr = self.recv_exact(self.conn, 4)
             if not hdr:
                 self._log("Server closed")
                 return
             length = int.from_bytes(hdr,'big')
-            data = self.conn.recv(length)
+            data = self.recv_exact(self.conn, length)
             pkt = IP(data)
             if ICMP in pkt and pkt[ICMP].type == 0:
                 src = pkt.src
@@ -154,8 +154,22 @@ class VPNClientApp(tk.Tk):
                 if t:
                     t.cancel()
 
+
+    def recv_exact(self, conn, size):
+        #makes sure you get the full length of bytes in recv
+        data = b""
+
+        while len(data) < size:
+            chunk = conn.recv(size - len(data))
+
+            if not chunk:
+                raise ConnectionError("Socket closed")
+
+            data += chunk
+
+        return data
+
     def _log(self, msg):
-        """רושם שורה לתיבת הלוג בממשק."""
         self.log.config(state="normal")
         self.log.insert(tk.END, msg + "\n")
         self.log.config(state="disabled")
@@ -165,7 +179,6 @@ class VPNClientApp(tk.Tk):
         self.attributes("-fullscreen", not is_full)
 
     def disconnect(self):
-        """סוגר את ההתחברות לשרת וסוגר את חלון ה-GUI."""
         if self.conn:
             self.conn.close()
         self.destroy()

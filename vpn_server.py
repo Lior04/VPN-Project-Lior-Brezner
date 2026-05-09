@@ -96,7 +96,7 @@ class TestVPNServerAppGui(tk.Tk):
 
     def handle_client(self, addr, conn):
         client_ip = addr[0]
-        data = conn.recv(4096)
+        data = self.recv_exact(conn, 4096)
         init = json.loads(data.decode())
         received_password = init.get("password", "")
 
@@ -121,7 +121,7 @@ class TestVPNServerAppGui(tk.Tk):
         }).encode())
 
    
-        ack = json.loads(conn.recv(4096).decode())
+        ack = json.loads(self.recv_exact(conn, 4096).decode())
         if ack.get('authKey') != key:
             conn.sendall(json.dumps({'status': 'error', 'reason': 'bad authKey'}).encode())
             self.after(0, self.append_log, "SERVER: bad authKey")
@@ -172,10 +172,10 @@ class TestVPNServerAppGui(tk.Tk):
 
         while not self.stopped:
             try:
-                hdr = conn.recv(4)
+                hdr = self.recv_exact(conn, 4)
                 if not hdr: return
                 length = int.from_bytes(hdr, 'big')
-                data = conn.recv(length)
+                data = self.recv_exact(conn, length)
                 pkt = IP(data)
                 
                 if ICMP in pkt and pkt[ICMP].type == 8:
@@ -244,6 +244,20 @@ class TestVPNServerAppGui(tk.Tk):
                         return str(network)
 
         raise RuntimeError(f"Could not determine subnet for local IP {local_ip}")
+    
+    def recv_exact(sock, size):
+        #makes sure you get the full length of bytes in recv
+        data = b""
+
+        while len(data) < size:
+            chunk = sock.recv(size - len(data))
+
+            if not chunk:
+                raise ConnectionError("Socket closed")
+
+            data += chunk
+
+        return data
 
 if __name__ == "__main__":
     TestVPNServerAppGui().mainloop()
