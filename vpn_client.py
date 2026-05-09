@@ -7,6 +7,7 @@ from scapy.all import send, conf, get_if_hwaddr
 from scapy.layers.inet import IP, ICMP
 import os
 
+
 SERVER_PORT = 8443
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -75,9 +76,24 @@ class VPNClientApp(tk.Tk):
             key = ch['authKey']
             self.session_id = ch["session_id"]
             hosts = ch['hosts']
+            self.session_secret = bytes.fromhex(ch['secret'])
             self.allowed = {h['ip'] for h in hosts}
 
-            self.conn.sendall(json.dumps({'authKey': key}).encode())
+            #creating hmac signature
+            signature = hmac.new(
+                self.session_secret,
+                payload,
+                hashlib.sha256
+            ).digest()
+            
+
+            Auth_packet = {
+                "session_id": self.session_id,
+                "hmac": signature,
+                "authkey": key.hex()
+            }
+
+            self.conn.sendall(json.dumps(Auth_packet).encode())
             rd = json.loads(self.recv_exact(self.conn, 4096).decode())
             if rd['status'] == 'error':
                 messagebox.showerror('server say: ' + rd['status'])
@@ -187,6 +203,8 @@ class VPNClientApp(tk.Tk):
         if self.conn:
             self.conn.close()
         self.destroy()
+
+    
 
 
 

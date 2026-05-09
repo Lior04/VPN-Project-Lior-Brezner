@@ -11,6 +11,8 @@ import psutil
 from dotenv import load_dotenv
 import bcrypt
 import secrets
+import hmac
+import hashlib
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 CERT_FILE = os.path.join(BASE_DIR, "cert.pem")
@@ -119,15 +121,30 @@ class TestVPNServerAppGui(tk.Tk):
 
             session_id = secrets.token_hex(16)
 
+            session_secret = secrets.token_bytes(32)
+
             conn.sendall(json.dumps({
                 'status': 'challenge',
                 'session_id': session_id,
                 'authKey': key,
+                'secret': session_secret.hex(),
                 'hosts': [{'ip': ip, 'mac': mac} for ip, mac in table.items()]
             }).encode())
 
-    
+
+            expected = hmac.new(
+                session_secret,
+                payload,
+                hashlib.sha256
+            ).hexdigest()
+
             ack = json.loads(self.recv_exact(conn, 4096).decode())
+
+            signature = ack.get('signature')
+
+            if not hmac.compare_digest(signature, expected):
+                print("INVALID HMAC")
+                return
             if ack.get('authKey') != key:
                 conn.sendall(json.dumps({'status': 'error', 'reason': 'bad authKey'}).encode())
                 self.after(0, self.append_log, "SERVER: bad authKey")
@@ -262,7 +279,7 @@ class TestVPNServerAppGui(tk.Tk):
 
         raise RuntimeError(f"Could not determine subnet for local IP {local_ip}")
     
-    def recv_exact(sock, size):
+    def recv_exact(self, sock, size):
         #makes sure you get the full length of bytes in recv
         data = b""
 
@@ -275,6 +292,7 @@ class TestVPNServerAppGui(tk.Tk):
             data += chunk
 
         return data
+
 
 if __name__ == "__main__":
     TestVPNServerAppGui().mainloop()
