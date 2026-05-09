@@ -101,12 +101,15 @@ class TestVPNServerAppGui(tk.Tk):
     def handle_client(self, addr, conn):
         try:
             client_ip = addr[0]
-            data = self.recv_exact(conn, 4096)
-            init = json.loads(data.decode())
+            print("SERVER: handle_client started")
+            print("SERVER: waiting for init")
+            init = self.recv_json(conn)
+            print("SERVER: got init")
+            print(init)
             received_password = init.get("password", "")
 
             if not bcrypt.checkpw(received_password.encode(), PASSWORD_HASH.encode()):
-                conn.sendall(json.dumps({'status': 'error', 'reason': 'bad password'}).encode())
+                self.send_json(conn, {'status': 'error', 'reason': 'bad password'})
                 self.after(0, self.append_log, "SERVER: bad password")
                 conn.close()
                 return
@@ -123,36 +126,55 @@ class TestVPNServerAppGui(tk.Tk):
 
             session_secret = secrets.token_bytes(32)
 
-            conn.sendall(json.dumps({
+            self.send_json(conn, {
                 'status': 'challenge',
                 'session_id': session_id,
                 'authKey': key,
                 'secret': session_secret.hex(),
                 'hosts': [{'ip': ip, 'mac': mac} for ip, mac in table.items()]
-            }).encode())
+            })
 
 
-            expected = hmac.new(
-                session_secret,
-                payload,
-                hashlib.sha256
-            ).hexdigest()
+            ack = self.recv_json(conn)
+            print("SERVER ACK:", ack)
 
-            ack = json.loads(self.recv_exact(conn, 4096).decode())
+            print("SERVER KEY:", key)
+            print("SERVER SECRET:", session_secret.hex())
 
-            signature = ack.get('signature')
+            payload = ack.get("authkey")
 
-            if not hmac.compare_digest(signature, expected):
-                print("INVALID HMAC")
-                return
-            if ack.get('authKey') != key:
-                conn.sendall(json.dumps({'status': 'error', 'reason': 'bad authKey'}).encode())
+
+            if payload != key:
+                self.send_json(conn, {'status': 'error', 'reason': 'bad authKey'})
                 self.after(0, self.append_log, "SERVER: bad authKey")
                 conn.close()
                 return
 
+            
+
+            expected = hmac.new(
+                session_secret,
+                payload.encode(),
+                hashlib.sha256
+            ).hexdigest()
+
+            signature = ack.get('signature')
+            print("SERVER EXPECTED:", expected)
+            print("SERVER RECEIVED:", signature)
+
+            if not hmac.compare_digest(signature, expected):
+                print("INVALID HMAC")
+                return
+            if ack.get("session_id") != session_id:
+                self.send_json(conn, {
+                    "status": "error",
+                    "reason": "invalid session"
+                })
+                conn.close()
+                return
+
         
-            conn.sendall(json.dumps({'status': 'ready'}).encode())
+            self.send_json(conn, {'status': 'ready'})
             self.after(0, self.append_log, "SERVER: handshake complete, tunnel open")
 
         
@@ -292,6 +314,17 @@ class TestVPNServerAppGui(tk.Tk):
             data += chunk
 
         return data
+    
+
+    def send_json(self, conn, obj):
+        data = json.dumps(obj).encode()
+        conn.sendall(len(data).to_bytes(4, 'big') + data)
+
+    def recv_json(self, conn):
+        hdr = self.recv_exact(conn, 4)
+        length = int.from_bytes(hdr, 'big')
+        data = self.recv_exact(conn, length)
+        return json.loads(data.decode())
 
 
 if __name__ == "__main__":

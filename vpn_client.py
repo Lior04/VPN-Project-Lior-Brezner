@@ -6,6 +6,8 @@ from PIL import Image, ImageTk
 from scapy.all import send, conf, get_if_hwaddr
 from scapy.layers.inet import IP, ICMP
 import os
+import hmac
+import hashlib
 
 
 SERVER_PORT = 8443
@@ -59,15 +61,19 @@ class VPNClientApp(tk.Tk):
             ctx.load_verify_locations('cert.pem')
             ctx.keylog_filename = 'tls-keys.log'
             ss = ctx.wrap_socket(raw, server_hostname=srv)
-            ss.settimeout(10)
+            ss.settimeout(30)
             self.conn = ss
 
             self.local_ip = self.conn.getsockname()[0]
             mac = get_if_hwaddr(conf.iface)
             init = {'password': self.pw_e.get(), 'client_mac': mac}
-            self.conn.sendall(json.dumps(init).encode())
 
-            ch = json.loads(self.recv_exact(self.conn, 16384).decode())
+            print("CLIENT: sending init")
+            self.send_json(self.conn, init)
+            print("CLIENT: init sent")
+
+            ch = self.recv_json(self.conn)
+            print("CLIENT: waiting for challenge")
             if ch['status'] == 'error':
                 messagebox.showerror('server say: ' + ch['status'])
                 tk.Tk.destroy(self)
@@ -79,22 +85,26 @@ class VPNClientApp(tk.Tk):
             self.session_secret = bytes.fromhex(ch['secret'])
             self.allowed = {h['ip'] for h in hosts}
 
+            
+
             #creating hmac signature
             signature = hmac.new(
                 self.session_secret,
-                payload,
+                key.encode(),
                 hashlib.sha256
-            ).digest()
+            ).hexdigest()
             
-
+            print("CLIENT KEY:", key)
+            print("CLIENT SECRET:", self.session_secret.hex())
+            print("CLIENT SIGNATURE:", signature)
             Auth_packet = {
                 "session_id": self.session_id,
-                "hmac": signature,
-                "authkey": key.hex()
+                "signature": signature,
+                "authkey": key
             }
 
-            self.conn.sendall(json.dumps(Auth_packet).encode())
-            rd = json.loads(self.recv_exact(self.conn, 4096).decode())
+            self.send_json(self.conn, Auth_packet)
+            rd = self.recv_json(self.conn)
             if rd['status'] == 'error':
                 messagebox.showerror('server say: ' + rd['status'])
                 tk.Tk.destroy(self)
@@ -204,7 +214,15 @@ class VPNClientApp(tk.Tk):
             self.conn.close()
         self.destroy()
 
-    
+    def send_json(self, conn, obj):
+        data = json.dumps(obj).encode()
+        conn.sendall(len(data).to_bytes(4, 'big') + data)
+
+    def recv_json(self, conn):
+        hdr = self.recv_exact(conn, 4)
+        length = int.from_bytes(hdr, 'big')
+        data = self.recv_exact(conn, length)
+        return json.loads(data.decode())
 
 
 
