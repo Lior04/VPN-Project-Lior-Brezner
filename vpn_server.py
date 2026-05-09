@@ -222,8 +222,19 @@ class TestVPNServerAppGui(tk.Tk):
         while not self.stopped:
             try:
                 hdr = self.recv_exact(conn, 4)
-                if not hdr: return
+
+                if hdr is None:
+                    print("Client disconnected")
+                    return
+
                 length = int.from_bytes(hdr, 'big')
+
+                data = self.recv_exact(conn, length)
+
+                if data is None:
+                    print("Incomplete packet")
+                    return
+                
                 payload = self.recv_exact(conn, length)
                 sid = payload[:16].hex()
                 data = payload[16:]
@@ -301,18 +312,16 @@ class TestVPNServerAppGui(tk.Tk):
 
         raise RuntimeError(f"Could not determine subnet for local IP {local_ip}")
     
-    def recv_exact(self, sock, size):
-        #makes sure you get the full length of bytes in recv
+    def recv_exact(self, conn, n):
         data = b""
-
-        while len(data) < size:
-            chunk = sock.recv(size - len(data))
-
-            if not chunk:
-                raise ConnectionError("Socket closed")
-
-            data += chunk
-
+        while len(data) < n:
+            try:
+                chunk = conn.recv(n - len(data))
+                if not chunk:
+                    raise ConnectionError("Connection closed")
+                data += chunk
+            except socket.timeout:
+                continue  # keep waiting instead of crashing
         return data
     
 

@@ -61,7 +61,7 @@ class VPNClientApp(tk.Tk):
             ctx.load_verify_locations('cert.pem')
             ctx.keylog_filename = 'tls-keys.log'
             ss = ctx.wrap_socket(raw, server_hostname=srv)
-            ss.settimeout(30)
+            ss.settimeout(100)
             self.conn = ss
 
             self.local_ip = self.conn.getsockname()[0]
@@ -170,13 +170,22 @@ class VPNClientApp(tk.Tk):
 
     def recv_replies(self):
 
-        while True:
+        while self.conn:
             hdr = self.recv_exact(self.conn, 4)
-            if not hdr:
-                self._log("Server closed")
+
+            if hdr is None:
+                self._log("Server disconnected")
                 return
-            length = int.from_bytes(hdr,'big')
+
+            length = int.from_bytes(hdr, 'big')
+
             data = self.recv_exact(self.conn, length)
+
+            if data is None:
+                self._log("Incomplete packet")
+                return
+            
+
             pkt = IP(data)
             if ICMP in pkt and pkt[ICMP].type == 0:
                 src = pkt.src
@@ -186,18 +195,16 @@ class VPNClientApp(tk.Tk):
                     t.cancel()
 
 
-    def recv_exact(self, conn, size):
-        #makes sure you get the full length of bytes in recv
+    def recv_exact(self, conn, n):
         data = b""
-
-        while len(data) < size:
-            chunk = conn.recv(size - len(data))
-
-            if not chunk:
-                raise ConnectionError("Socket closed")
-
-            data += chunk
-
+        while len(data) < n:
+            try:
+                chunk = conn.recv(n - len(data))
+                if not chunk:
+                    raise ConnectionError("Connection closed")
+                data += chunk
+            except socket.timeout:
+                continue  # keep waiting instead of crashing
         return data
 
     def _log(self, msg):
