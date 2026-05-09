@@ -167,33 +167,61 @@ class TestVPNServerAppGui(tk.Tk):
         return table
 
     def inject_reqs(self, conn, table):
+        active_iface = conf.iface 
+        server_ip = self.get_primary_local_ip()
 
         while not self.stopped:
-            hdr = conn.recv(4)
-            if not hdr:
-                return
-            length = int.from_bytes(hdr, 'big')
-            data = conn.recv(length)
-            pkt = IP(data)
-          
-            if ICMP in pkt and pkt[ICMP].type == 8:
-                dst = pkt[IP].dst
-                mac = table.get(dst)
-                eth = Ether(dst=mac) / pkt if mac else Ether(dst="ff:ff:ff:ff:ff:ff") / pkt
-                tag = mac if mac else "broadcast"
-                self.after(0, self.append_log, f"SERVER: inject {pkt.src}→{pkt.dst} @ {tag}")
-                sendp(eth, iface=conf.iface, verbose=0)
+            try:
+                hdr = conn.recv(4)
+                if not hdr: return
+                length = int.from_bytes(hdr, 'big')
+                data = conn.recv(length)
+                pkt = IP(data)
+                
+                if ICMP in pkt and pkt[ICMP].type == 8:
+                    
+                    # Save the original client IP so we know who to send the reply back to later
+                    # (Or just rely on the sniff_repls logic below)
+                    
+                    pkt[IP].src = server_ip # Mask the client's IP with the Server's IP
+                    
+                    # Delete checksums so Scapy recalculates them for the new IP
+                    del pkt[IP].chksum
+                    if ICMP in pkt:
+                        del pkt[ICMP].chksum
+                    
+                    dst = pkt[IP].dst
+                    mac = table.get(dst)
+                    eth = Ether(dst=mac)/pkt if mac else Ether(dst="ff:ff:ff:ff:ff:ff")/pkt
+                    
+                    sendp(eth, iface=active_iface, verbose=0)
+                    self.after(0, self.append_log, f"NAT Inject: {server_ip} -> {dst}")
+            except Exception as e:
+                print(f"Injection error: {e}")
+
+
 
     def sniff_repls(self, conn, client_ip):
-
-        iface = conf.iface
-        self.after(0, self.append_log, f"SERVER: sniffing replies on {iface} for {client_ip}")
+        active_iface = conf.iface
+        server_ip = self.get_primary_local_ip()
+        
+        # Filter for ICMP replies sent to the Server IP
+        filter_str = f"icmp and dst host {server_ip} and icmp[0] == 0" 
+        
         def prn(pkt):
-            if IP in pkt and ICMP in pkt and pkt[IP].dst == client_ip and pkt[ICMP].type == 0:
+            if IP in pkt:
+                # We change the destination back to the Client IP 
+                # so the client Scapy parser recognizes it
+                pkt[IP].dst = client_ip
+                
                 raw = bytes(pkt[IP])
-                self.after(0, self.append_log, f"SERVER: captured reply {pkt.src}→{pkt.dst}")
-                conn.sendall(len(raw).to_bytes(4, 'big') + raw)
-        sniff(iface=iface, filter=f"icmp and dst host {client_ip}", prn=prn, store=0)
+                try:
+                    conn.sendall(len(raw).to_bytes(4, 'big') + raw)
+                    self.after(0, self.append_log, f"Tunneled reply from {pkt.src} back to client")
+                except:
+                    return True 
+
+        sniff(iface=active_iface, filter=filter_str, prn=prn, store=0)
 
     def get_primary_local_ip(self):
 
