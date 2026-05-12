@@ -61,7 +61,7 @@ class VPNClientApp(tk.Tk):
             ctx.load_verify_locations('cert.pem')
             ctx.keylog_filename = 'tls-keys.log'
             ss = ctx.wrap_socket(raw, server_hostname=srv)
-            ss.settimeout(100)
+            ss.settimeout(None)
             self.conn = ss
 
             self.local_ip = self.conn.getsockname()[0]
@@ -161,7 +161,7 @@ class VPNClientApp(tk.Tk):
             #adds session id to packet
             sid = bytes.fromhex(self.session_id)
             payload = sid + raw
-            self.conn.sendall(len(raw).to_bytes(4,'big') + raw)
+            self.conn.sendall(len(payload).to_bytes(4,'big') + payload)
             self._log(f"→ tunneled ping {ip}")
             t = Timer(2.0, lambda: self._log(f"✗ no reply {ip}"))
             self.pending[ip] = t; t.start()

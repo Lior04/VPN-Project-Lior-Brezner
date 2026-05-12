@@ -178,7 +178,7 @@ class TestVPNServerAppGui(tk.Tk):
             self.after(0, self.append_log, "SERVER: handshake complete, tunnel open")
 
         
-            threading.Thread(target=self.inject_reqs, args=(conn, table), daemon=True).start()
+            threading.Thread(target=self.inject_reqs, args=(conn, table, session_id), daemon=True).start()
             threading.Thread(target=self.sniff_repls, args=(conn, client_ip), daemon=True).start()
 
 
@@ -215,7 +215,7 @@ class TestVPNServerAppGui(tk.Tk):
             table[ip] = mac
         return table
 
-    def inject_reqs(self, conn, table):
+    def inject_reqs(self, conn, table, session_id):
         active_iface = conf.iface 
         server_ip = self.get_primary_local_ip()
 
@@ -229,14 +229,18 @@ class TestVPNServerAppGui(tk.Tk):
 
                 length = int.from_bytes(hdr, 'big')
 
-                data = self.recv_exact(conn, length)
+                payload = self.recv_exact(conn, length)
 
-                if data is None:
+                if payload is None:
                     print("Incomplete packet")
                     return
                 
-                payload = self.recv_exact(conn, length)
                 sid = payload[:16].hex()
+
+                if sid != session_id:
+                    print("Invalid Session")
+                    return
+
                 data = payload[16:]
                 pkt = IP(data)
                 
