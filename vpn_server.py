@@ -30,7 +30,7 @@ def gen_auth_key(n=8):
 
     chars = string.ascii_letters + string.digits
     return "".join(random.choice(chars) for _ in range(n))
-class TestVPNServerAppGui(tk.Tk):
+class VPNServerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.raw_sock = None
@@ -341,4 +341,4 @@ class TestVPNServerAppGui(tk.Tk):
 
 
 if __name__ == "__main__":
-    TestVPNServerAppGui().mainloop()
+    VPNServerApp().mainloop()
